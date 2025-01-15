@@ -16,11 +16,10 @@ from app.core.security import (
     get_password_hash
 )
 from app.schemas.auth import Token, UserLogin, RefreshToken
-from app.models.user import User
+from app.models.user import User as UserModel
 from app.db.session import get_db
 from app.core.cache import redis_client
-from app.schemas.user import UserCreate, User
-from app.models.user import User as UserModel
+from app.schemas.user import UserCreate, User as UserSchema
 
 router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
@@ -33,7 +32,7 @@ def login(
     """
     OAuth2 compatible token login, get an access token for future requests
     """
-    user = db.query(User).filter(User.email == form_data.username).first()
+    user = db.query(UserModel).filter(UserModel.email == form_data.username).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -73,7 +72,7 @@ async def refresh_token(
                 detail="Token has been invalidated",
             )
         
-        user = db.query(User).filter(User.id == int(payload["sub"])).first()
+        user = db.query(UserModel).filter(UserModel.id == int(payload["sub"])).first()
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -125,13 +124,13 @@ async def logout(
         )
 
 @router.get("/me", response_model=Any)
-def read_users_me(current_user: User = Depends(deps.get_current_user)) -> Any:
+def read_users_me(current_user: UserSchema = Depends(deps.get_current_user)) -> Any:
     """
     Get current user information
     """
     return current_user 
 
-@router.post("/register", response_model=User)
+@router.post("/register", response_model=UserSchema)
 def register_user(
     user_in: UserCreate,
     db: Session = Depends(deps.get_db)
