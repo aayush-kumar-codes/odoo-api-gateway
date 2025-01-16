@@ -7,20 +7,46 @@ from app.models.order import Order as OrderModel, OrderLine as OrderLineModel
 from app.models.user import User
 from app.db.session import get_db
 from app.core.cache import get_cache, set_cache, clear_cache_pattern
+from datetime import datetime
 
 router = APIRouter()
 
 @router.get("/", response_model=List[Order])
 async def get_orders(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user),
     skip: int = 0,
-    limit: int = 100
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(deps.get_current_user)
 ):
-    """Get all orders for the current user"""
-    return db.query(OrderModel).filter(
-        OrderModel.user_id == current_user.id
-    ).offset(skip).limit(limit).all()
+    """
+    Retrieve orders for the current user
+    """
+    try:
+        # Query orders with name coalesce
+        orders = db.query(OrderModel)\
+            .filter(OrderModel.user_id == current_user.id)\
+            .order_by(OrderModel.order_date.desc())\
+            .offset(skip)\
+            .limit(limit)\
+            .all()
+            
+        # Fix any orders with missing names
+        for order in orders:
+            if not order.name:
+                order_date = order.order_date or datetime.utcnow()
+                order.name = f"ORD/{order_date.strftime('%Y%m')}/{order.id:03d}"
+        
+        if orders:
+            db.commit()  # Save the generated names
+            
+        return orders
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving orders: {str(e)}"
+        )
 
 @router.get("/{order_id}", response_model=Order)
 async def get_order(
