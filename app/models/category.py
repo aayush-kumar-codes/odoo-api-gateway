@@ -15,4 +15,4 @@ class Category(Base):
     # Define relationships
     parent = relationship("Category", remote_side=[id], backref="children")
     vendor = relationship("Vendor", back_populates="categories")
-    products = relationship("Product", secondary=product_category) 
+    products = relationship("Product", secondary=product_category,overlaps="categories") 

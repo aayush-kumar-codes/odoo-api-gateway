@@ -46,15 +46,19 @@ class ProductBase(BaseModel):
     name: str
     description: Optional[str] = None
     list_price: float
-    category_ids: List[int]
     vendor_id: int
     is_active: bool = True
     image_url: Optional[str] = None
     tags: Optional[str] = None
     barcode: Optional[str] = None
+   
+
+    class Config:
+        orm_mode = True
 
 class ProductCreate(ProductBase):
-    pass
+    category_ids: List[int]
+   
 
 class Product(ProductBase):
     id: int

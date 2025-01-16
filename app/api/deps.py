@@ -10,6 +10,7 @@ from app.models.user import User as UserModel
 from app.schemas.auth import TokenPayload
 from app.core.cache import get_cache, set_cache
 import json
+from fastapi.encoders import jsonable_encoder
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
 
@@ -52,23 +53,29 @@ def cache_response(expire: int = 3600, key_prefix: str = "") -> Callable:
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         async def wrapper(*args, **kwargs):
+            # Remove db session from cache key generation
+            cache_kwargs = {k: v for k, v in kwargs.items() if k != 'db'}
+            
             # Generate cache key from function name and arguments
             cache_key = f"{key_prefix}:{func.__name__}"
-            if kwargs:
-                cache_key += f":{json.dumps(kwargs, sort_keys=True)}"
+            if cache_kwargs:
+                cache_key += f":{json.dumps(cache_kwargs, sort_keys=True)}"
             
             # Try to get from cache
-            cached_response = await get_cache(cache_key)
+            cached_response = get_cache(cache_key)
             if cached_response is not None:
                 return json.loads(cached_response)
             
             # If not in cache, execute function
             response = await func(*args, **kwargs)
             
+            # Convert response to JSON-serializable format
+            json_response = jsonable_encoder(response)
+            
             # Store in cache
-            await set_cache(
+            set_cache(
                 cache_key,
-                json.dumps(response),
+                json.dumps(json_response),
                 expire=expire
             )
             

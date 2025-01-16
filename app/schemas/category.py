@@ -1,19 +1,20 @@
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 class CategoryBase(BaseModel):
     name: str
     description: Optional[str] = None
     parent_id: Optional[int] = None
-    vendor_id: int
+    vendor_id: Optional[int] = None
 
 class CategoryCreate(CategoryBase):
-    pass
+    vendor_id: int
 
 class Category(CategoryBase):
     id: int
     children: List["Category"] = []
-    vendor_id: int
     
-    class Config:
-        from_attributes = True 
+    model_config = ConfigDict(from_attributes=True)
+
+# This is needed for the recursive List["Category"] reference
+Category.model_rebuild() 

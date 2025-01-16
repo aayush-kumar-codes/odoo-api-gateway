@@ -24,6 +24,6 @@ class Product(Base):
     barcode = Column(String)
     
     # Change the relationship definition to avoid backref conflict
-    categories = relationship("Category", secondary=product_category)
+    categories = relationship("Category", secondary=product_category, overlaps="products")
     variants = relationship("ProductVariant", back_populates="product", cascade="all, delete-orphan")
     vendor = relationship("Vendor", back_populates="products") 
