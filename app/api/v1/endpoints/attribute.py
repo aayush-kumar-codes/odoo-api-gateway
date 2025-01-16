@@ -6,7 +6,7 @@ from app.schemas.attribute import Attribute, AttributeCreate
 from app.models.attribute import ProductAttribute
 from app.models.user import User
 from app.db.session import get_db
-from app.core.cache import get_cache, set_cache, delete_cache
+from app.core.cache import get_cache, set_cache, delete_cache, clear_cache_pattern
 from app.schemas.attribute_value import AttributeValue, AttributeValueCreate
 from app.models.attribute_value import ProductAttributeValue
 
@@ -156,18 +156,30 @@ async def create_attribute_value(
     """
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Not enough permissions")
-    
+
     # Check if attribute exists
     attribute = db.query(ProductAttribute).filter(ProductAttribute.id == attribute_id).first()
     if not attribute:
         raise HTTPException(status_code=404, detail="Attribute not found")
+
+    # Create new attribute value
+    db_value = ProductAttributeValue(
+        name=value.value,  # Use value as name
+        value=value.value,
+        display_value=value.display_value,
+        attribute_id=attribute_id,
+        sequence=value.sequence if hasattr(value, 'sequence') else 0,
+        is_custom=value.is_custom if hasattr(value, 'is_custom') else False,
+        variant_id=value.variant_id if hasattr(value, 'variant_id') else None
+    )
     
-    db_value = ProductAttributeValue(**value.dict(), attribute_id=attribute_id)
     db.add(db_value)
     db.commit()
     db.refresh(db_value)
+
+    # Clear cache
+    clear_cache_pattern(f"attribute:{attribute_id}:values:*")
     
-    delete_cache(f"attribute:{attribute_id}:values:*")
     return db_value
 
 @router.put("/{attribute_id}/values/{value_id}", response_model=AttributeValue)

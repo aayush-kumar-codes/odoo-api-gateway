@@ -7,6 +7,8 @@ class ProductAttributeValue(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True)
+    value = Column(String)
+    display_value = Column(String)
     attribute_id = Column(Integer, ForeignKey("product_attributes.id"))
     sequence = Column(Integer, default=0)
     is_custom = Column(Boolean, default=False)
