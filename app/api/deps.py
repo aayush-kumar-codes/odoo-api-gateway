@@ -53,8 +53,11 @@ def cache_response(expire: int = 3600, key_prefix: str = "") -> Callable:
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         async def wrapper(*args, **kwargs):
-            # Remove db session from cache key generation
-            cache_kwargs = {k: v for k, v in kwargs.items() if k != 'db'}
+            # Remove non-serializable objects from cache key generation
+            cache_kwargs = {
+                k: v for k, v in kwargs.items() 
+                if k not in ['db', 'current_user']
+            }
             
             # Generate cache key from function name and arguments
             cache_key = f"{key_prefix}:{func.__name__}"
