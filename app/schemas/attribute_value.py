@@ -1,16 +1,16 @@
+from typing import Optional
 from pydantic import BaseModel
 
 class AttributeValueBase(BaseModel):
-    name: str
-    sequence: int = 0
-    is_custom: bool = False
+    value: str
+    display_value: str
+    attribute_id: int
 
 class AttributeValueCreate(AttributeValueBase):
     pass
 
 class AttributeValue(AttributeValueBase):
     id: int
-    attribute_id: int
     
     class Config:
         from_attributes = True 

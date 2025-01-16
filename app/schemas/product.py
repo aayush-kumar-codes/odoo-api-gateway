@@ -1,5 +1,16 @@
-from typing import Optional, List
+from typing import List, Optional
 from pydantic import BaseModel
+from .attribute import Attribute
+from .attribute_value import AttributeValue
+
+class ProductAttributeValue(BaseModel):
+    id: int
+    attribute_id: int
+    value: str
+    display_value: str
+    
+    class Config:
+        from_attributes = True
 
 class CategoryBase(BaseModel):
     name: str
@@ -15,34 +26,19 @@ class Category(CategoryBase):
     class Config:
         from_attributes = True
 
-class ProductAttributeValue(BaseModel):
+class ProductVariantBase(BaseModel):
+    sku: str
+    price: float
+    stock_quantity: int
+    attribute_values: List[ProductAttributeValue] = []
+
+class ProductVariantCreate(ProductVariantBase):
+    pass
+
+class ProductVariant(ProductVariantBase):
     id: int
-    name: str
-    attribute_id: int
-    sequence: int = 0
-    is_custom: bool = False
-    variant_id: Optional[int] = None
-
-    class Config:
-        from_attributes = True
-
-class ProductVariantCreate(BaseModel):
     product_id: int
-    sku: str
-    price: float
-    barcode: Optional[str] = None
-    price_extra: Optional[float] = 0.0
-    attribute_values: List[ProductAttributeValue]
-
-class ProductVariant(BaseModel):
-    id: int
-    product_template_id: int
-    sku: str
-    price: float
-    barcode: Optional[str] = None
-    price_extra: float = 0.0
-    attribute_values: List[ProductAttributeValue]
-
+    
     class Config:
         from_attributes = True
 
