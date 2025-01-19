@@ -1,14 +1,15 @@
-from typing import Generator, Callable
+from typing import Generator, Callable, Optional
 from functools import wraps
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
 from sqlalchemy.orm import Session
 from app.core.config import settings
+from app.core.odoo_client import OdooClient
 from app.db.session import SessionLocal
 from app.models.user import User as UserModel
 from app.schemas.auth import TokenPayload
-from app.core.cache import get_cache, set_cache
+from app.core.cache import get_cache, set_cache, redis_client
 import json
 from fastapi.encoders import jsonable_encoder
 
@@ -21,30 +22,45 @@ def get_db() -> Generator:
     finally:
         db.close()
 
-async def get_current_user(
-    db: Session = Depends(get_db),
-    token: str = Depends(oauth2_scheme)
-) -> UserModel:
+def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+) -> dict:
+    """Validate token and return current user info from Odoo"""
     try:
         payload = jwt.decode(
             token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
         )
-        token_data = TokenPayload(**payload)
-        if token_data.sub is None:
+        uid = int(payload.get("sub"))
+        if not uid:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Could not validate credentials",
             )
+            
+        # Check if token is blacklisted
+        if redis_client.get(f"blacklist:{token}"):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token has been invalidated",
+            )
+            
+        # Verify user still exists in Odoo
+        odoo = OdooClient()
+        user_info = odoo.get_user_info(uid)
+        if not user_info:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User no longer exists",
+            )
+            
+        return user_info
+        
     except JWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
         )
-    
-    user = db.query(UserModel).filter(UserModel.id == int(token_data.sub)).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user
 
 def cache_response(expire: int = 3600, key_prefix: str = "") -> Callable:
     """

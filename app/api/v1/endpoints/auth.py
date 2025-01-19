@@ -15,51 +15,68 @@ from app.core.security import (
     get_token_payload,
     get_password_hash
 )
-from app.schemas.auth import Token, UserLogin, RefreshToken
+from app.schemas.auth import Token, UserLogin, RefreshToken, OdooLogin
 from app.models.user import User as UserModel
 from app.db.session import get_db
 from app.core.cache import redis_client
 from app.schemas.user import UserCreate, User as UserSchema
+from app.core.odoo_client import OdooClient
 
 router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
 
 @router.post("/login", response_model=Token)
 def login(
-    db: Session = Depends(get_db),
-    form_data: OAuth2PasswordRequestForm = Depends()
-) -> Any:
-    """
-    OAuth2 compatible token login, get an access token for future requests
-    """
-    user = db.query(UserModel).filter(UserModel.email == form_data.username).first()
-    if not user or not verify_password(form_data.password, user.hashed_password):
+    login_data: OdooLogin,
+    db: Session = Depends(get_db)
+) -> Token:
+    """Authenticate with Odoo credentials"""
+    odoo = OdooClient()
+    
+    # Authenticate against Odoo
+    uid = odoo.authenticate(login_data.login, login_data.password)
+    if not uid:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
+            detail="Invalid Odoo credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    access_token = create_access_token(data={"sub": str(user.id)})
-    refresh_token = create_refresh_token(data={"sub": str(user.id)})
+    # Get user info from Odoo
+    user_info = odoo.get_user_info(uid)
+    if not user_info:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not fetch user information",
+        )
     
-    return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "bearer"
+    # Create tokens with Odoo user info
+    token_data = {
+        "sub": str(uid),
+        "email": user_info.get("email"),
+        "name": user_info.get("name"),
+        "odoo_login": user_info.get("login"),
     }
+    
+    access_token = create_access_token(data=token_data)
+    refresh_token = create_refresh_token(data=token_data)
+    
+    return Token(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        token_type="bearer",
+        odoo_uid=uid
+    )
 
 @router.post("/refresh", response_model=Token)
 async def refresh_token(
     refresh_token_data: RefreshToken,
     db: Session = Depends(get_db)
-) -> Any:
-    """
-    Refresh access token using refresh token
-    """
+) -> Token:
+    """Refresh access token using refresh token"""
     try:
         payload = get_token_payload(refresh_token_data.refresh_token)
-        if not payload or not payload.get("sub"):
+        if not payload:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid refresh token",
@@ -72,21 +89,33 @@ async def refresh_token(
                 detail="Token has been invalidated",
             )
         
-        user = db.query(UserModel).filter(UserModel.id == int(payload["sub"])).first()
-        if not user:
+        # Verify Odoo user still exists
+        odoo = OdooClient()
+        uid = int(payload["sub"])
+        user_info = odoo.get_user_info(uid)
+        if not user_info:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found",
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Odoo user no longer exists",
             )
         
-        access_token = create_access_token(data={"sub": str(user.id)})
-        refresh_token = create_refresh_token(data={"sub": str(user.id)})
-        
-        return {
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "token_type": "bearer"
+        # Create new tokens
+        token_data = {
+            "sub": str(uid),
+            "email": user_info.get("email"),
+            "name": user_info.get("name"),
+            "odoo_login": user_info.get("login"),
         }
+        
+        access_token = create_access_token(data=token_data)
+        refresh_token = create_refresh_token(data=token_data)
+        
+        return Token(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            token_type="bearer",
+            odoo_uid=uid
+        )
         
     except JWTError:
         raise HTTPException(
