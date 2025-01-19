@@ -16,8 +16,8 @@ from fastapi.encoders import jsonable_encoder
 security = HTTPBearer()
 
 def get_db() -> Generator:
-    db = SessionLocal()
     try:
+        db = SessionLocal()
         yield db
     finally:
         db.close()
@@ -39,32 +39,38 @@ async def get_current_user(
                 detail="Could not validate credentials"
             )
         
-        try:
-            # Check if token is blacklisted
-            if redis_client.get(f"blacklist:{token}"):
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Token has been invalidated"
-                )
-        except Exception:
-            # Handle Redis connection issues gracefully
-            pass
-            
-        # Verify user still exists in Odoo
-        odoo = OdooClient()
-        user_info = odoo.get_user_info(uid)
-        if not user_info:
+        # Check token blacklist
+        if redis_client and redis_client.get(f"blacklist:{token}"):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User no longer exists"
+                detail="Token has been invalidated"
             )
             
-        return user_info
-        
+        # Verify user in Odoo
+        try:
+            odoo = OdooClient()
+            user_info = odoo.get_user_info(uid)
+            if not user_info:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="User no longer exists"
+                )
+            return user_info
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Error connecting to authentication service"
+            )
+            
     except JWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials"
+            detail="Invalid authentication credentials"
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication error occurred"
         )
 
 def cache_response(expire: int = 3600, key_prefix: str = "") -> Callable:
@@ -74,36 +80,41 @@ def cache_response(expire: int = 3600, key_prefix: str = "") -> Callable:
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         async def wrapper(*args, **kwargs):
-            # Remove non-serializable objects from cache key generation
-            cache_kwargs = {
-                k: v for k, v in kwargs.items() 
-                if k not in ['db', 'current_user']
-            }
-            
-            # Generate cache key from function name and arguments
-            cache_key = f"{key_prefix}:{func.__name__}"
-            if cache_kwargs:
-                cache_key += f":{json.dumps(cache_kwargs, sort_keys=True)}"
-            
-            # Try to get from cache
-            cached_response = get_cache(cache_key)
-            if cached_response is not None:
-                return json.loads(cached_response)
-            
-            # If not in cache, execute function
-            response = await func(*args, **kwargs)
-            
-            # Convert response to JSON-serializable format
-            json_response = jsonable_encoder(response)
-            
-            # Store in cache
-            set_cache(
-                cache_key,
-                json.dumps(json_response),
-                expire=expire
-            )
-            
-            return response
+            try:
+                # Cache key generation
+                cache_kwargs = {
+                    k: v for k, v in kwargs.items() 
+                    if k not in ['db', 'current_user', 'credentials']
+                }
+                
+                cache_key = f"{key_prefix}:{func.__name__}"
+                if cache_kwargs:
+                    cache_key += f":{json.dumps(cache_kwargs, sort_keys=True)}"
+                
+                # Try cache
+                if redis_client:
+                    cached_response = get_cache(cache_key)
+                    if cached_response is not None:
+                        return json.loads(cached_response)
+                
+                # Execute function
+                response = await func(*args, **kwargs)
+                json_response = jsonable_encoder(response)
+                
+                # Cache response
+                if redis_client:
+                    set_cache(
+                        cache_key,
+                        json.dumps(json_response),
+                        expire=expire
+                    )
+                
+                return response
+            except Exception as e:
+                # Log cache error but continue with original function
+                response = await func(*args, **kwargs)
+                return response
+                
         return wrapper
     return decorator
 

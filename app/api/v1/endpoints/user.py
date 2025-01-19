@@ -1,5 +1,5 @@
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Security, status
 from sqlalchemy.orm import Session
 from app.api import deps
 from app.schemas.user import User, UserCreate, UserUpdate, PasswordReset, PasswordResetConfirm
@@ -8,29 +8,58 @@ from app.core.security import get_password_hash
 from app.db.session import get_db
 from app.core.cache import get_cache, set_cache, clear_cache_pattern
 from app.utils.email import send_reset_password_email
+from fastapi.security import HTTPAuthorizationCredentials
 import secrets
 
 router = APIRouter()
 
+# Standard error messages
+USER_NOT_FOUND = "User not found"
+UNAUTHORIZED = "Not enough permissions"
+EMAIL_IN_USE = "Email already registered"
+
 @router.get("/", response_model=List[User])
 async def get_users(
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(deps.get_current_superuser),
+    credentials: HTTPAuthorizationCredentials = Security(deps.security),
     skip: int = 0,
     limit: int = 100
 ):
     """Get all users (admin only)"""
-    users = db.query(UserModel).offset(skip).limit(limit).all()
-    return users
+    try:
+        current_user = await deps.get_current_user(credentials, db)
+        if not current_user.get("is_superuser"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=UNAUTHORIZED
+            )
+        
+        cache_key = f"user:list:{skip}:{limit}"
+        cached_data = get_cache(cache_key)
+        if cached_data:
+            return cached_data
+            
+        users = db.query(UserModel).offset(skip).limit(limit).all()
+        set_cache(cache_key, users, expire=1800)
+        return users
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving users: {str(e)}"
+        )
 
 @router.get("/{user_id}", response_model=User)
 async def get_user(
     user_id: int,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(deps.get_current_user)
+    credentials: HTTPAuthorizationCredentials = Security(deps.security)
 ):
     """Get user details"""
-    if not current_user.is_superuser and current_user.id != user_id:
+    current_user = await deps.get_current_user(credentials, db)
+    if not current_user.get("is_superuser") and current_user.get("id") != user_id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
     user = db.query(UserModel).filter(UserModel.id == user_id).first()
@@ -63,10 +92,11 @@ async def update_user(
     user_id: int,
     user: UserUpdate,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(deps.get_current_user)
+    credentials: HTTPAuthorizationCredentials = Security(deps.security)
 ):
     """Update user details"""
-    if not current_user.is_superuser and current_user.id != user_id:
+    current_user = await deps.get_current_user(credentials, db)
+    if not current_user.get("is_superuser") and current_user.get("id") != user_id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
     db_user = db.query(UserModel).filter(UserModel.id == user_id).first()
@@ -84,9 +114,13 @@ async def update_user(
 async def delete_user(
     user_id: int,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(deps.get_current_superuser)
+    credentials: HTTPAuthorizationCredentials = Security(deps.security)
 ):
     """Delete user (admin only)"""
+    current_user = await deps.get_current_user(credentials, db)
+    if not current_user.get("is_superuser"):
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+    
     user = db.query(UserModel).filter(UserModel.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")

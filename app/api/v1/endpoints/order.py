@@ -1,30 +1,39 @@
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Security, status
 from sqlalchemy.orm import Session
 from app.api import deps
 from app.schemas.order import Order, OrderCreate, OrderLine, OrderStatus
 from app.models.order import Order as OrderModel, OrderLine as OrderLineModel
-from app.models.user import User
 from app.db.session import get_db
 from app.core.cache import get_cache, set_cache, clear_cache_pattern
 from datetime import datetime
+from fastapi.security import HTTPAuthorizationCredentials
 
 router = APIRouter()
+
+# Standard error messages
+ORDER_NOT_FOUND = "Order not found"
+UNAUTHORIZED = "Not enough permissions"
 
 @router.get("/", response_model=List[Order])
 async def get_orders(
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user)
+    credentials: HTTPAuthorizationCredentials = Security(deps.security)
 ):
-    """
-    Retrieve orders for the current user
-    """
+    """Retrieve orders for the current user"""
     try:
-        # Query orders with name coalesce
+        current_user = await deps.get_current_user(credentials, db)
+        user_id = current_user.get('id')
+        
+        cache_key = f"order:list:{user_id}:{skip}:{limit}"
+        cached_data = get_cache(cache_key)
+        if cached_data:
+            return cached_data
+            
         orders = db.query(OrderModel)\
-            .filter(OrderModel.user_id == current_user.id)\
+            .filter(OrderModel.user_id == user_id)\
             .order_by(OrderModel.order_date.desc())\
             .offset(skip)\
             .limit(limit)\
@@ -37,14 +46,17 @@ async def get_orders(
                 order.name = f"ORD/{order_date.strftime('%Y%m')}/{order.id:03d}"
         
         if orders:
-            db.commit()  # Save the generated names
+            db.commit()
+            set_cache(cache_key, orders, expire=1800)
             
         return orders
         
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
         raise HTTPException(
-            status_code=500,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error retrieving orders: {str(e)}"
         )
 
@@ -52,12 +64,14 @@ async def get_orders(
 async def get_order(
     order_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user)
+    credentials: HTTPAuthorizationCredentials = Security(deps.security)
 ):
     """Get details of a specific order"""
+    current_user = await deps.get_current_user(credentials, db)
+    
     order = db.query(OrderModel).filter(
         OrderModel.id == order_id,
-        OrderModel.user_id == current_user.id
+        OrderModel.user_id == current_user.get('id')
     ).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -67,11 +81,13 @@ async def get_order(
 async def create_order(
     order: OrderCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user)
+    credentials: HTTPAuthorizationCredentials = Security(deps.security)
 ):
     """Create a new order"""
+    current_user = await deps.get_current_user(credentials, db)
+    
     db_order = OrderModel(
-        user_id=current_user.id,
+        user_id=current_user.get('id'),
         shipping_address=order.shipping_address,
         payment_method=order.payment_method,
         state=OrderStatus.DRAFT
@@ -99,12 +115,14 @@ async def update_order(
     order_id: int,
     order: OrderCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user)
+    credentials: HTTPAuthorizationCredentials = Security(deps.security)
 ):
     """Update an order"""
+    current_user = await deps.get_current_user(credentials, db)
+    
     db_order = db.query(OrderModel).filter(
         OrderModel.id == order_id,
-        OrderModel.user_id == current_user.id,
+        OrderModel.user_id == current_user.get('id'),
         OrderModel.state == OrderStatus.DRAFT
     ).first()
     
@@ -139,12 +157,14 @@ async def update_order(
 async def cancel_order(
     order_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user)
+    credentials: HTTPAuthorizationCredentials = Security(deps.security)
 ):
     """Cancel an order"""
+    current_user = await deps.get_current_user(credentials, db)
+    
     order = db.query(OrderModel).filter(
         OrderModel.id == order_id,
-        OrderModel.user_id == current_user.id,
+        OrderModel.user_id == current_user.get('id'),
         OrderModel.state.in_([OrderStatus.DRAFT, OrderStatus.PENDING])
     ).first()
     
@@ -159,12 +179,14 @@ async def cancel_order(
 async def get_order_status(
     order_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user)
+    credentials: HTTPAuthorizationCredentials = Security(deps.security)
 ):
     """Get the status of an order"""
+    current_user = await deps.get_current_user(credentials, db)
+    
     order = db.query(OrderModel).filter(
         OrderModel.id == order_id,
-        OrderModel.user_id == current_user.id
+        OrderModel.user_id == current_user.get('id')
     ).first()
     
     if not order:
@@ -176,12 +198,14 @@ async def get_order_status(
 async def confirm_order(
     order_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user)
+    credentials: HTTPAuthorizationCredentials = Security(deps.security)
 ):
     """Confirm the order for payment processing"""
+    current_user = await deps.get_current_user(credentials, db)
+    
     order = db.query(OrderModel).filter(
         OrderModel.id == order_id,
-        OrderModel.user_id == current_user.id,
+        OrderModel.user_id == current_user.get('id'),
         OrderModel.state == OrderStatus.DRAFT
     ).first()
     

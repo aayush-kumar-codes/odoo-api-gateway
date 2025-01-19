@@ -1,41 +1,58 @@
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Security, status
 from sqlalchemy.orm import Session
 from app.api import deps
 from app.schemas.product import ProductVariant, ProductVariantCreate, ProductAttributeValue
 from app.models.variant import ProductVariant as VariantModel
-from app.models.user import User
 from app.db.session import get_db
 from app.core.cache import get_cache, set_cache, delete_cache
+from fastapi.security import HTTPAuthorizationCredentials
 
 router = APIRouter()
+
+# Standard error messages
+VARIANT_NOT_FOUND = "Variant not found"
+UNAUTHORIZED = "Not enough permissions"
 
 @router.get("/", response_model=List[ProductVariant])
 async def get_variants(
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Security(deps.security)
 ):
-    """
-    Retrieve all variants.
-    """
-    cache_key = f"variants:{skip}:{limit}"
-    cached_data = get_cache(cache_key)
-    if cached_data:
-        return cached_data
-    
-    variants = db.query(VariantModel).offset(skip).limit(limit).all()
-    set_cache(cache_key, variants, expire=1800)
-    return variants
+    """Retrieve all variants."""
+    try:
+        current_user = await deps.get_current_user(credentials, db)
+        
+        cache_key = f"variant:list:{skip}:{limit}"
+        cached_data = get_cache(cache_key)
+        if cached_data:
+            return cached_data
+        
+        variants = db.query(VariantModel).offset(skip).limit(limit).all()
+        set_cache(cache_key, variants, expire=1800)
+        return variants
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving variants: {str(e)}"
+        )
 
 @router.get("/{variant_id}", response_model=ProductVariant)
 async def get_variant(
     variant_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials = Security(deps.security)
 ):
     """
     Get a specific variant by ID.
     """
+    current_user = await deps.get_current_user(credentials, db)
+    
     cache_key = f"variant:{variant_id}"
     cached_data = get_cache(cache_key)
     if cached_data:
@@ -52,12 +69,16 @@ async def get_variant(
 async def create_variant(
     variant: ProductVariantCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_superuser)
+    credentials: HTTPAuthorizationCredentials = Security(deps.security)
 ):
     """
-    Create a new product variant
+    Create a new product variant (admin only)
     """
-    db_variant = ProductVariantModel(
+    current_user = await deps.get_current_user(credentials, db)
+    if not current_user.get("is_superuser"):
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+    
+    db_variant = VariantModel(
         product_id=variant.product_id,
         sku=variant.sku,
         price=variant.price,
@@ -90,12 +111,13 @@ async def update_variant(
     variant_id: int,
     variant: ProductVariant,
     db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user)
+    credentials: HTTPAuthorizationCredentials = Security(deps.security)
 ):
     """
     Update a variant (admin only).
     """
-    if not current_user.is_superuser:
+    current_user = await deps.get_current_user(credentials, db)
+    if not current_user.get("is_superuser"):
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
     db_variant = db.query(VariantModel).filter(VariantModel.id == variant_id).first()
@@ -116,12 +138,13 @@ async def update_variant(
 async def delete_variant(
     variant_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user)
+    credentials: HTTPAuthorizationCredentials = Security(deps.security)
 ):
     """
     Delete a variant (admin only).
     """
-    if not current_user.is_superuser:
+    current_user = await deps.get_current_user(credentials, db)
+    if not current_user.get("is_superuser"):
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
     db_variant = db.query(VariantModel).filter(VariantModel.id == variant_id).first()

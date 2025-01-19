@@ -1,14 +1,15 @@
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Security
 from sqlalchemy.orm import Session
 from app.api import deps
 from app.schemas.attribute import Attribute, AttributeCreate
 from app.models.attribute import ProductAttribute
-from app.models.user import User
 from app.db.session import get_db
 from app.core.cache import get_cache, set_cache, delete_cache, clear_cache_pattern
 from app.schemas.attribute_value import AttributeValue, AttributeValueCreate
 from app.models.attribute_value import ProductAttributeValue
+from fastapi.security import HTTPAuthorizationCredentials
+from app.models.user import User
 
 router = APIRouter()
 
@@ -16,7 +17,8 @@ router = APIRouter()
 async def get_attributes(
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Security(deps.get_current_user)
 ):
     """
     Retrieve all attributes.
@@ -33,7 +35,8 @@ async def get_attributes(
 @router.get("/{attribute_id}", response_model=Attribute)
 async def get_attribute(
     attribute_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Security(deps.get_current_user)
 ):
     """
     Get a specific attribute by ID.
@@ -54,14 +57,11 @@ async def get_attribute(
 async def create_attribute(
     attribute: AttributeCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user)
+    current_user: dict = Security(deps.get_current_superuser)
 ):
     """
     Create a new attribute (admin only).
     """
-    if not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
-    
     db_attribute = ProductAttribute(**attribute.dict())
     db.add(db_attribute)
     db.commit()
@@ -75,14 +75,11 @@ async def update_attribute(
     attribute_id: int,
     attribute: AttributeCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user)
+    current_user: dict = Security(deps.get_current_superuser)
 ):
     """
     Update an attribute (admin only).
     """
-    if not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
-    
     db_attribute = db.query(ProductAttribute).filter(ProductAttribute.id == attribute_id).first()
     if not db_attribute:
         raise HTTPException(status_code=404, detail="Attribute not found")
@@ -101,14 +98,11 @@ async def update_attribute(
 async def delete_attribute(
     attribute_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user)
+    current_user: dict = Security(deps.get_current_superuser)
 ):
     """
     Delete an attribute (admin only).
     """
-    if not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
-    
     db_attribute = db.query(ProductAttribute).filter(ProductAttribute.id == attribute_id).first()
     if not db_attribute:
         raise HTTPException(status_code=404, detail="Attribute not found")
@@ -188,13 +182,18 @@ async def update_attribute_value(
     value_id: int,
     value: AttributeValueCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user)
+    credentials: HTTPAuthorizationCredentials = Security(deps.security)
 ):
     """
     Update an attribute value.
     """
-    if not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
+    # Get current user and verify superuser status
+    current_user = await deps.get_current_user(credentials, db)
+    if not current_user.get("is_superuser"):
+        raise HTTPException(
+            status_code=403,
+            detail="Not enough permissions. Superuser required."
+        )
     
     db_value = db.query(ProductAttributeValue)\
         .filter(
