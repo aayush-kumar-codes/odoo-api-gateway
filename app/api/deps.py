@@ -1,7 +1,7 @@
-from typing import Generator, Callable, Optional
+from typing import Generator, Dict, Any, Callable
 from functools import wraps
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi import Depends, HTTPException, status, Security
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError
 from sqlalchemy.orm import Session
 from app.core.config import settings
@@ -13,7 +13,7 @@ from app.core.cache import get_cache, set_cache, redis_client
 import json
 from fastapi.encoders import jsonable_encoder
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
+security = HTTPBearer()
 
 def get_db() -> Generator:
     db = SessionLocal()
@@ -22,12 +22,13 @@ def get_db() -> Generator:
     finally:
         db.close()
 
-def get_current_user(
-    token: str = Depends(oauth2_scheme),
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Security(security),
     db: Session = Depends(get_db)
-) -> dict:
-    """Validate token and return current user info from Odoo"""
+) -> Dict[str, Any]:
+    """Base authentication - returns current user info"""
     try:
+        token = credentials.credentials
         payload = jwt.decode(
             token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
         )
@@ -35,15 +36,19 @@ def get_current_user(
         if not uid:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Could not validate credentials",
+                detail="Could not validate credentials"
             )
-            
-        # Check if token is blacklisted
-        if redis_client.get(f"blacklist:{token}"):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token has been invalidated",
-            )
+        
+        try:
+            # Check if token is blacklisted
+            if redis_client.get(f"blacklist:{token}"):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Token has been invalidated"
+                )
+        except Exception:
+            # Handle Redis connection issues gracefully
+            pass
             
         # Verify user still exists in Odoo
         odoo = OdooClient()
@@ -51,7 +56,7 @@ def get_current_user(
         if not user_info:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User no longer exists",
+                detail="User no longer exists"
             )
             
         return user_info
@@ -59,7 +64,7 @@ def get_current_user(
     except JWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
+            detail="Could not validate credentials"
         )
 
 def cache_response(expire: int = 3600, key_prefix: str = "") -> Callable:
@@ -110,11 +115,16 @@ async def get_current_active_user(
     return current_user
 
 async def get_current_superuser(
-    current_user: UserModel = Depends(get_current_user)
-) -> UserModel:
-    if not current_user.is_superuser:
+    current_user: Dict[str, Any] = Security(get_current_user)
+) -> Dict[str, Any]:
+    """Superuser authentication - returns current superuser info"""
+    if not current_user.get("is_superuser"):
         raise HTTPException(
-            status_code=403, 
-            detail="The user doesn't have enough privileges"
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Superuser privileges required"
         )
-    return current_user 
+    return current_user
+
+# Callable dependencies for router use
+require_auth = Security(get_current_user)
+require_superuser = Security(get_current_superuser) 
