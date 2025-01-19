@@ -25,8 +25,9 @@ class OrderLine(OrderLineBase):
     order_id: int
     subtotal: float
 
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 class OrderBase(BaseModel):
     shipping_address: str
@@ -44,5 +45,6 @@ class Order(OrderBase):
     total_price: float
     lines: List[OrderLine]
 
-    class Config:
-        from_attributes = True 
+    model_config = {
+        "from_attributes": True
+    } 

@@ -54,7 +54,9 @@ class ProductBase(BaseModel):
    
 
     class Config:
-        orm_mode = True
+        model_config = {
+            "from_attributes": True
+        }
 
 class ProductCreate(ProductBase):
     category_ids: List[int]

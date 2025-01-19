@@ -1,8 +1,8 @@
-"""initial
+"""create_initial_tables
 
-Revision ID: c08808729e34
+Revision ID: 4d3257c598da
 Revises: 
-Create Date: 2025-01-16 02:59:25.963143
+Create Date: 2025-01-19 16:24:25.288086
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'c08808729e34'
+revision: str = '4d3257c598da'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -208,6 +208,8 @@ def upgrade() -> None:
     op.create_table('product_attribute_values',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('name', sa.String(), nullable=True),
+    sa.Column('value', sa.String(), nullable=True),
+    sa.Column('display_value', sa.String(), nullable=True),
     sa.Column('attribute_id', sa.Integer(), nullable=True),
     sa.Column('sequence', sa.Integer(), nullable=True),
     sa.Column('is_custom', sa.Boolean(), nullable=True),

@@ -30,5 +30,6 @@ class VendorUpdate(BaseModel):
 class Vendor(VendorBase):
     id: int
 
-    class Config:
-        from_attributes = True 
+    model_config = {
+        "from_attributes": True
+    } 

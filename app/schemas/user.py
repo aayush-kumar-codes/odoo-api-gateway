@@ -29,5 +29,6 @@ class User(UserBase):
     id: int
     is_superuser: bool = False
 
-    class Config:
-        from_attributes = True 
+    model_config = {
+        "from_attributes": True
+    } 

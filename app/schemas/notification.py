@@ -27,5 +27,6 @@ class Notification(NotificationBase):
     updated_at: datetime
     status: NotificationStatus
 
-    class Config:
-        from_attributes = True 
+    model_config = {
+        "from_attributes": True
+    } 
