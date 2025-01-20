@@ -58,14 +58,37 @@ async def get_user(
     credentials: HTTPAuthorizationCredentials = Security(deps.security)
 ):
     """Get user details"""
-    current_user = await deps.get_current_user(credentials, db)
-    if not current_user.get("is_superuser") and current_user.get("id") != user_id:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
-    
-    user = db.query(UserModel).filter(UserModel.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user
+    try:
+        current_user = await deps.get_current_user(credentials, db)
+        
+        # Check all possible admin fields
+        is_admin = any([
+            current_user.get("is_superuser"),
+            current_user.get("odoo_login") == "admin",
+            current_user.get("name") == "Administrator",
+            current_user.get("login") == "admin",
+            current_user.get("role") == "admin"
+        ])
+        
+        # Check if the user is an admin or trying to access their own details
+        is_self = current_user.get("id") == user_id
+        
+        if not is_admin and not is_self:
+            raise HTTPException(status_code=403, detail="Not enough permissions")
+        
+        user = db.query(UserModel).filter(UserModel.id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        return user
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving user: {str(e)}"
+        )
 
 @router.post("/", response_model=User)
 async def create_user(

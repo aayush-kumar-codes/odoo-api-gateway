@@ -218,25 +218,47 @@ async def delete_attribute_value(
     attribute_id: int,
     value_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_user)
+    credentials: HTTPAuthorizationCredentials = Security(deps.security)
 ):
     """
     Delete an attribute value.
     """
-    if not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
-    
-    db_value = db.query(ProductAttributeValue)\
-        .filter(
-            ProductAttributeValue.id == value_id,
-            ProductAttributeValue.attribute_id == attribute_id
-        ).first()
-    
-    if not db_value:
-        raise HTTPException(status_code=404, detail="Attribute value not found")
-    
-    db.delete(db_value)
-    db.commit()
-    
-    delete_cache(f"attribute:{attribute_id}:values:*")
-    return {"message": "Attribute value deleted successfully"} 
+    try:
+        current_user = await deps.get_current_user(credentials, db)
+        
+        # Check all possible admin fields
+        is_admin = any([
+            current_user.get("is_superuser"),
+            current_user.get("odoo_login") == "admin",
+            current_user.get("name") == "Administrator",
+            current_user.get("login") == "admin",
+            current_user.get("role") == "admin"
+        ])
+        
+        if not is_admin:
+            raise HTTPException(status_code=403, detail="Not enough permissions. Superuser required.")
+        
+        db_value = db.query(ProductAttributeValue)\
+            .filter(
+                ProductAttributeValue.id == value_id,
+                ProductAttributeValue.attribute_id == attribute_id
+            ).first()
+        
+        if not db_value:
+            raise HTTPException(status_code=404, detail="Attribute value not found")
+        
+        db.delete(db_value)
+        db.commit()
+        
+        delete_cache(f"attribute:{attribute_id}:values:*")
+        return {"message": "Attribute value deleted successfully"}
+        
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error deleting attribute value: {str(e)}"
+        ) 
