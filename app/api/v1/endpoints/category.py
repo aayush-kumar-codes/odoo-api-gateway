@@ -175,19 +175,32 @@ async def get_category_products(
     """
     Get all products in a specific category.
     """
-    # Verify authentication
-    current_user = await deps.get_current_user(credentials, db)
-    
-    cache_key = f"category:{category_id}:products:{skip}:{limit}"
-    cached_data = get_cache(cache_key)
-    if cached_data:
-        return cached_data
-    
-    products = db.query(ProductModel)\
-        .filter(ProductModel.category_id == category_id)\
-        .offset(skip)\
-        .limit(limit)\
-        .all()
-    
-    set_cache(cache_key, products, expire=1800)
-    return products 
+    try:
+        # Verify authentication
+        current_user = await deps.get_current_user(credentials, db)
+        
+        # Check cache first
+        cache_key = f"category:{category_id}:products:{skip}:{limit}"
+        cached_data = get_cache(cache_key)
+        if cached_data:
+            return cached_data
+        
+        # Get products through the many-to-many relationship
+        products = (
+            db.query(ProductModel)
+            .join(ProductModel.categories)
+            .filter(CategoryModel.id == category_id)
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
+        
+        # Cache the results
+        set_cache(cache_key, products, expire=1800)
+        return products
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving products: {str(e)}"
+        ) 

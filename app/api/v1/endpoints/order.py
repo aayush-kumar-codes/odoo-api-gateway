@@ -1,77 +1,38 @@
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, Security, status
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.api import deps
 from app.schemas.order import Order, OrderCreate, OrderLine, OrderStatus
 from app.models.order import Order as OrderModel, OrderLine as OrderLineModel
+from app.models.user import User
 from app.db.session import get_db
 from app.core.cache import get_cache, set_cache, clear_cache_pattern
 from datetime import datetime
-from fastapi.security import HTTPAuthorizationCredentials
 
 router = APIRouter()
 
-# Standard error messages
-ORDER_NOT_FOUND = "Order not found"
-UNAUTHORIZED = "Not enough permissions"
-
 @router.get("/", response_model=List[Order])
 async def get_orders(
-    skip: int = 0,
-    limit: int = 100,
     db: Session = Depends(get_db),
-    credentials: HTTPAuthorizationCredentials = Security(deps.security)
+    current_user: User = Depends(deps.get_current_user),
+    skip: int = 0,
+    limit: int = 100
 ):
-    """Retrieve orders for the current user"""
-    try:
-        current_user = await deps.get_current_user(credentials, db)
-        user_id = current_user.get('id')
-        
-        cache_key = f"order:list:{user_id}:{skip}:{limit}"
-        cached_data = get_cache(cache_key)
-        if cached_data:
-            return cached_data
-            
-        orders = db.query(OrderModel)\
-            .filter(OrderModel.user_id == user_id)\
-            .order_by(OrderModel.order_date.desc())\
-            .offset(skip)\
-            .limit(limit)\
-            .all()
-            
-        # Fix any orders with missing names
-        for order in orders:
-            if not order.name:
-                order_date = order.order_date or datetime.utcnow()
-                order.name = f"ORD/{order_date.strftime('%Y%m')}/{order.id:03d}"
-        
-        if orders:
-            db.commit()
-            set_cache(cache_key, orders, expire=1800)
-            
-        return orders
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error retrieving orders: {str(e)}"
-        )
+    """Get all orders for the current user"""
+    return db.query(OrderModel).filter(
+        OrderModel.user_id == current_user.id
+    ).offset(skip).limit(limit).all()
 
 @router.get("/{order_id}", response_model=Order)
 async def get_order(
     order_id: int,
     db: Session = Depends(get_db),
-    credentials: HTTPAuthorizationCredentials = Security(deps.security)
+    current_user: User = Depends(deps.get_current_user)
 ):
     """Get details of a specific order"""
-    current_user = await deps.get_current_user(credentials, db)
-    
     order = db.query(OrderModel).filter(
         OrderModel.id == order_id,
-        OrderModel.user_id == current_user.get('id')
+        OrderModel.user_id == current_user.id
     ).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -81,13 +42,11 @@ async def get_order(
 async def create_order(
     order: OrderCreate,
     db: Session = Depends(get_db),
-    credentials: HTTPAuthorizationCredentials = Security(deps.security)
+    current_user: User = Depends(deps.get_current_user)
 ):
     """Create a new order"""
-    current_user = await deps.get_current_user(credentials, db)
-    
     db_order = OrderModel(
-        user_id=current_user.get('id'),
+        user_id=current_user.id,
         shipping_address=order.shipping_address,
         payment_method=order.payment_method,
         state=OrderStatus.DRAFT
@@ -115,14 +74,12 @@ async def update_order(
     order_id: int,
     order: OrderCreate,
     db: Session = Depends(get_db),
-    credentials: HTTPAuthorizationCredentials = Security(deps.security)
+    current_user: User = Depends(deps.get_current_user)
 ):
     """Update an order"""
-    current_user = await deps.get_current_user(credentials, db)
-    
     db_order = db.query(OrderModel).filter(
         OrderModel.id == order_id,
-        OrderModel.user_id == current_user.get('id'),
+        OrderModel.user_id == current_user.id,
         OrderModel.state == OrderStatus.DRAFT
     ).first()
     
@@ -157,36 +114,51 @@ async def update_order(
 async def cancel_order(
     order_id: int,
     db: Session = Depends(get_db),
-    credentials: HTTPAuthorizationCredentials = Security(deps.security)
+    current_user: User = Depends(deps.get_current_user)
 ):
     """Cancel an order"""
-    current_user = await deps.get_current_user(credentials, db)
-    
-    order = db.query(OrderModel).filter(
-        OrderModel.id == order_id,
-        OrderModel.user_id == current_user.get('id'),
-        OrderModel.state.in_([OrderStatus.DRAFT, OrderStatus.PENDING])
-    ).first()
-    
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found or cannot be cancelled")
-    
-    order.state = OrderStatus.CANCELLED
-    db.commit()
-    return {"message": "Order cancelled successfully"}
+    try:
+        order = db.query(OrderModel).filter(
+            OrderModel.id == order_id,
+            OrderModel.user_id == current_user.get('id'),
+            OrderModel.state.in_([OrderStatus.DRAFT, OrderStatus.PENDING])
+        ).first()
+        
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found or cannot be cancelled")
+        
+        order.state = OrderStatus.CANCELLED
+        
+        try:
+            db.commit()
+            return {"message": "Order cancelled successfully"}
+            
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error cancelling order: {str(e)}"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error cancelling order: {str(e)}"
+        )
 
 @router.get("/{order_id}/status")
 async def get_order_status(
     order_id: int,
     db: Session = Depends(get_db),
-    credentials: HTTPAuthorizationCredentials = Security(deps.security)
+    current_user: User = Depends(deps.get_current_user)
 ):
     """Get the status of an order"""
-    current_user = await deps.get_current_user(credentials, db)
-    
     order = db.query(OrderModel).filter(
         OrderModel.id == order_id,
-        OrderModel.user_id == current_user.get('id')
+        OrderModel.user_id == current_user.id
     ).first()
     
     if not order:
@@ -198,14 +170,12 @@ async def get_order_status(
 async def confirm_order(
     order_id: int,
     db: Session = Depends(get_db),
-    credentials: HTTPAuthorizationCredentials = Security(deps.security)
+    current_user: User = Depends(deps.get_current_user)
 ):
     """Confirm the order for payment processing"""
-    current_user = await deps.get_current_user(credentials, db)
-    
     order = db.query(OrderModel).filter(
         OrderModel.id == order_id,
-        OrderModel.user_id == current_user.get('id'),
+        OrderModel.user_id == current_user.id,
         OrderModel.state == OrderStatus.DRAFT
     ).first()
     

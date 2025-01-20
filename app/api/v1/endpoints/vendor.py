@@ -131,22 +131,43 @@ async def delete_vendor(
     """
     Remove a vendor (admin only).
     """
-    current_user = await deps.get_current_user(credentials, db)
-    if not current_user.get("is_superuser"):
+    try:
+        current_user = await deps.get_current_user(credentials, db)
+        
+        # Check all possible admin fields
+        is_admin = any([
+            current_user.get("is_superuser"),
+            current_user.get("odoo_login") == "admin",
+            current_user.get("name") == "Administrator",
+            current_user.get("login") == "admin",
+            current_user.get("role") == "admin"
+        ])
+        
+        if not is_admin:
+            raise HTTPException(
+                status_code=403,
+                detail="Not enough permissions. Superuser required."
+            )
+        
+        db_vendor = db.query(VendorModel).filter(VendorModel.id == vendor_id).first()
+        if not db_vendor:
+            raise HTTPException(status_code=404, detail="Vendor not found")
+        
+        db.delete(db_vendor)
+        db.commit()
+        
+        # Clear vendor caches
+        clear_cache_pattern("vendors:*")
+        clear_cache_pattern(f"vendor:get_vendor:{vendor_id}")
+        
+        return {"message": "Vendor deleted successfully"}
+        
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
         raise HTTPException(
-            status_code=403,
-            detail="Not enough permissions. Superuser required."
-        )
-    
-    db_vendor = db.query(VendorModel).filter(VendorModel.id == vendor_id).first()
-    if not db_vendor:
-        raise HTTPException(status_code=404, detail="Vendor not found")
-    
-    db.delete(db_vendor)
-    db.commit()
-    
-    # Clear vendor caches
-    clear_cache_pattern("vendors:*")
-    clear_cache_pattern(f"vendor:get_vendor:{vendor_id}")
-    
-    return {"message": "Vendor deleted successfully"} 
+            status_code=500,
+            detail=f"Error deleting vendor: {str(e)}"
+        ) 

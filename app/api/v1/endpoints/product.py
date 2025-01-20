@@ -225,7 +225,17 @@ async def sync_products(
     Sync product data with Odoo (admin only)
     """
     current_user = await deps.get_current_user(credentials, db)
-    if not current_user.get("is_superuser"):
+    
+    # Check all possible admin fields
+    is_admin = any([
+        current_user.get("is_superuser"),
+        current_user.get("odoo_login") == "admin",
+        current_user.get("name") == "Administrator",
+        current_user.get("login") == "admin",
+        current_user.get("role") == "admin"
+    ])
+    
+    if not is_admin:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
     try:
